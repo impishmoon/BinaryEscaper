@@ -70,7 +70,7 @@ namespace BinaryEscaper
                 {
                     for(var x = 0; x < imageSize; x++)
                     {
-                        var i = y + x;
+                        var i = x + imageSize * y;
                         if (i >= binary.Length) break;
 
                         var byteValue = binary[i];
