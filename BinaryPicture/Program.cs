@@ -83,6 +83,7 @@ namespace BinaryEscaper
 
             //Insert original extension string
             var extensionBytes = Encoding.UTF8.GetBytes(Path.GetExtension(options.inputPath).Substring(1));
+            binary.RemoveAll(x => x == 0);
             binary.InsertRange(1, extensionBytes);
 
             //Null-byte terminator
