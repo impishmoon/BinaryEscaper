@@ -4,13 +4,16 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace BinaryEscaper
 {
     class Program
     {
+        //Function to gZip compress bytes
         static byte[] Compress(byte[] bytes)
         {
             using (var msi = new MemoryStream(bytes))
@@ -25,6 +28,7 @@ namespace BinaryEscaper
             }
         }
 
+        //Function to gZip decompress bytes
         static byte[] Decompress(byte[] bytes)
         {
             using (var msi = new MemoryStream(bytes))
@@ -39,43 +43,83 @@ namespace BinaryEscaper
             }
         }
 
+        //Soft get an index from a list. If index doesn't exist, return a failSafe
+        static byte TryGetFromList(List<byte> array, int index, byte failSafe)
+        {
+            if(index < array.Count)
+            {
+                return array[index];
+            }
+            else
+            {
+                return failSafe;
+            }
+        }
+
         static void EncodePNG(WorkOptions options)
         {
             Console.WriteLine("Opening file");
 
             byte[] rawBinary = File.ReadAllBytes(options.inputPath);
-            byte[] binary;
+            List<byte> binary;
 
             if (options.compress)
             {
                 Console.WriteLine("Compressing data");
 
-                binary = Compress(rawBinary);
+                binary = Compress(rawBinary).ToList();
 
-                Console.WriteLine($"Compression done, ratio {Math.Round((float)binary.Length / rawBinary.Length * 100f)}%");
+                Console.WriteLine($"Compression done, ratio {Math.Round((float)binary.Count / rawBinary.Length * 100f)}%");
             }
             else
             {
-                binary = rawBinary;
+                binary = rawBinary.ToList();
             }
 
-            var imageSize = (int)Math.Ceiling(Math.Sqrt(binary.Length));
+            //Begin inserting header
+
+            //Was compression used in generating this PNG?
+            binary.Insert(0, options.compress ? (byte)1 : (byte)0);
+
+            //Insert original extension string
+            var extensionBytes = Encoding.UTF8.GetBytes(Path.GetExtension(options.inputPath).Substring(1));
+            binary.InsertRange(1, extensionBytes);
+
+            //Null-byte terminator
+            binary.Insert(extensionBytes.Length + 1, 0);
+
+            var imageSize = (int)Math.Ceiling(Math.Sqrt(binary.Count / 4));
 
             Console.WriteLine($"Image size: {imageSize}");
             Console.WriteLine("Writing pixels now...");
 
+            //Insert all bytes into packed pixels on image, using multi-threading for speed
             using (var image = new DirectBitmap(imageSize, imageSize))
             {
                 Parallel.For(0, imageSize, y =>
                 {
                     for(var x = 0; x < imageSize; x++)
                     {
-                        var i = x + imageSize * y;
-                        if (i >= binary.Length) break;
+                        var i = (x + imageSize * y) * 4;
 
-                        var byteValue = binary[i];
+                        byte a, r, g, b;
 
-                        image.SetPixel(x, y, Color.FromArgb(255, byteValue, byteValue, byteValue));
+                        if (i > binary.Count)
+                        {
+                            a = 255;
+                            r = 255;
+                            g = 255;
+                            b = 255;
+                        }
+                        else
+                        {
+                            a = TryGetFromList(binary, i, 255);
+                            r = TryGetFromList(binary, i + 1, 255);
+                            g = TryGetFromList(binary, i + 2, 255);
+                            b = TryGetFromList(binary, i + 3, 255);
+                        }
+
+                        image.SetPixel(x, y, Color.FromArgb(a, r, g, b));
                     }
                 });
 
@@ -85,6 +129,7 @@ namespace BinaryEscaper
             }
         }
 
+        //Function that gets an image, returns array of bytes. Used by DecodePNG
         public static byte[] BitmapToByteArray(Bitmap bitmap)
         {
             BitmapData bmpdata = null;
@@ -111,30 +156,85 @@ namespace BinaryEscaper
         {
             Console.WriteLine("Opening file");
 
+            //Open image
             var bitmap = new Bitmap(options.inputPath);
 
+            //Get original bytes
             byte[] bitmapBytes = BitmapToByteArray(bitmap);
+
             var bytes = new List<byte>(bitmapBytes.Length / 4);
 
             Console.WriteLine("Sorting data...");
 
+            //Since the bytes come in a wacky PNG order format, we resort them into the same order we put them in so it's easier to use them
             for (var i = 0; i < bitmapBytes.Length / 4; i++)
             {
-                if (bitmapBytes[i * 4 + 3] == 0) break;
+                byte b = bitmapBytes[i * 4 + 0];
+                byte g = bitmapBytes[i * 4 + 1];
+                byte r = bitmapBytes[i * 4 + 2];
+                byte a = bitmapBytes[i * 4 + 3];
 
-                bytes.Add(bitmapBytes[i * 4]);
+                bytes.Add(a);
+                bytes.Add(r);
+                bytes.Add(g);
+                bytes.Add(b);
             }
 
+            //Trim all FF bytes at the end. We keep going until we see a byte that isnt FF
+            //This is a bit problematic since we could accidentally delete a real FF byte, used by the original file,
+            //but I hope the chances of that happening are low enough...
+            while(bytes.Count > 0)
+            {
+                var i = bytes.Count - 1;
+
+                if (bytes[i] == 255)
+                {
+                    bytes.RemoveAt(i);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            //Parse header
+            var usedCompression = bytes[0] == 1;
+            var originalExtensionBytes = new List<byte>();
+            var originalExtension = "";
+
+            //Read the extension string until we hit the null-byte terminator
+            var scanExtensionIndex = 1;
+            while (true)
+            {
+                if (bytes[scanExtensionIndex] == 0) break;
+
+                originalExtensionBytes.Add(bytes[scanExtensionIndex]);
+                scanExtensionIndex++;
+            }
+            originalExtension = Encoding.UTF8.GetString(originalExtensionBytes.ToArray());
+
+            //Calculate total header size
+            var headerSize = originalExtensionBytes.Count + 2; //+2 to account for usedCompression byte and null terminator byte
+
+            //Remove header and send it off to get decompressed/written to output
+            bytes.RemoveRange(0, headerSize);
             var bytesArray = bytes.ToArray();
 
-            if (options.compress)
+            if (usedCompression)
             {
                 Console.WriteLine("Decompressing");
                 bytesArray = Decompress(bytesArray);
             }
 
+            var outputPath = options.outputPath;
+            if(outputPath == "")
+            {
+                //If output path was no specified, we use the name of the file plus the original extension string found in our header
+                outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + "." + originalExtension;
+            }
+
             Console.WriteLine("Done! Writing to output!");
-            File.WriteAllBytes(options.outputPath, bytesArray);
+            File.WriteAllBytes(outputPath, bytesArray);
         }
 
         static void ShowHelp()
@@ -147,7 +247,7 @@ namespace BinaryEscaper
             Console.WriteLine("-out: specify output file (optional, if not specified, a default name is assumed)");
             Console.WriteLine("-encode [-e]: encode a file");
             Console.WriteLine("-decode [-d]: decode a file");
-            Console.WriteLine("-nocompress: disables compression/decompression");
+            Console.WriteLine("-nocompress: disables compression/decompression (this is ignored in decoding mode)");
         }
 
         static void Main(string[] args)
@@ -202,6 +302,7 @@ namespace BinaryEscaper
                         {
                             options.inputPath = inputPath;
                             options.operation = WorkOptions.Operation.Encode;
+                            options.compress = !inputPath.EndsWith(".zip") && !inputPath.EndsWith(".rar") && !inputPath.EndsWith(".gz");
                         }
                     }
                     else
@@ -211,17 +312,7 @@ namespace BinaryEscaper
                     }
                 }
 
-                if(options.outputPath == "")
-                {
-                    if(options.operation == WorkOptions.Operation.Encode)
-                    {
-                        options.outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + ".png";
-                    }
-                    else
-                    {
-                        options.outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + ".out";
-                    }
-                }
+                if(options.outputPath == "" && options.operation == WorkOptions.Operation.Encode) options.outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + ".png";
 
                 if (options.operation == WorkOptions.Operation.Encode) EncodePNG(options);
                 if (options.operation == WorkOptions.Operation.Decode) DecodePNG(options);
