@@ -82,12 +82,12 @@ namespace BinaryEscaper
             binary.Insert(0, options.compress ? (byte)1 : (byte)0);
 
             //Insert original extension string
-            var extensionBytes = Encoding.UTF8.GetBytes(Path.GetExtension(options.inputPath).Substring(1));
-            binary.RemoveAll(x => x == 0);
+            var extensionBytes = Encoding.UTF8.GetBytes(Path.GetExtension(options.inputPath).Substring(1)).ToList();
+            extensionBytes.RemoveAll(x => x == 0);
             binary.InsertRange(1, extensionBytes);
 
             //Null-byte terminator
-            binary.Insert(extensionBytes.Length + 1, 0);
+            binary.Insert(extensionBytes.Count + 1, 0);
 
             var imageSize = (int)Math.Ceiling(Math.Sqrt(binary.Count / 4));
 
