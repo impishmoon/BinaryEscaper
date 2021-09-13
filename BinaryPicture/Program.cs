@@ -43,6 +43,31 @@ namespace BinaryEscaper
             }
         }
 
+        //Function to get if we can write to a folder or not...
+        static bool IsDirectoryWritable(string dirPath, bool throwIfFails = false)
+        {
+            try
+            {
+                using (FileStream fs = File.Create(
+                    Path.Combine(
+                        dirPath,
+                        Path.GetRandomFileName()
+                    ),
+                    1,
+                    FileOptions.DeleteOnClose)
+                )
+                { }
+                return true;
+            }
+            catch
+            {
+                if (throwIfFails)
+                    throw;
+                else
+                    return false;
+            }
+        }
+
         //Soft get an index from a list. If index doesn't exist, return a failSafe
         static byte TryGetFromList(List<byte> array, int index, byte failSafe)
         {
@@ -126,7 +151,16 @@ namespace BinaryEscaper
 
                 Console.WriteLine("Done! Writing to file now");
 
-                image.Bitmap.Save(options.outputPath, ImageFormat.Png);
+                var outputPath = options.outputPath;
+
+                if(outputPath == "")
+                {
+                    outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + ".png";
+
+                    if (!IsDirectoryWritable(Directory.GetCurrentDirectory())) Directory.SetCurrentDirectory(AppDomain.CurrentDomain.BaseDirectory);
+                }
+
+                image.Bitmap.Save(outputPath, ImageFormat.Png);
             }
         }
 
@@ -232,6 +266,8 @@ namespace BinaryEscaper
             {
                 //If output path was no specified, we use the name of the file plus the original extension string found in our header
                 outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + "." + originalExtension;
+
+                if (!IsDirectoryWritable(Directory.GetCurrentDirectory())) Directory.SetCurrentDirectory(AppDomain.CurrentDomain.BaseDirectory);
             }
 
             Console.WriteLine("Done! Writing to output!");
@@ -312,8 +348,6 @@ namespace BinaryEscaper
                         return;
                     }
                 }
-
-                if(options.outputPath == "" && options.operation == WorkOptions.Operation.Encode) options.outputPath = Path.GetFileNameWithoutExtension(options.inputPath) + ".png";
 
                 if (options.operation == WorkOptions.Operation.Encode) EncodePNG(options);
                 if (options.operation == WorkOptions.Operation.Decode) DecodePNG(options);
