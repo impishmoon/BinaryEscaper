@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("BinaryEscaper")]
+[assembly: AssemblyTitle("Sending bytes where they weren't meant to go...")]
 [assembly: AssemblyDescription("Sending bytes where they weren't meant to go...")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
