@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -68,6 +69,31 @@ namespace BinaryEscaper
             }
         }
 
+        public static void PrintByteArray(byte[] array)
+        {
+            for (int i = 0; i < array.Length; i++)
+            {
+                Console.Write($"{array[i]:X2}");
+            }
+            Console.WriteLine();
+        }
+
+        static string SHA256CheckSum(byte[] binary)
+        {
+            using(SHA256 sha = SHA256.Create())
+            {
+                var shaBinary = sha.ComputeHash(binary);
+                string result = "";
+
+                for (int i = 0; i < shaBinary.Length; i++)
+                {
+                    result += $"{shaBinary[i]:X2}";
+                }
+
+                return result.ToLower();
+            }
+        }
+
         //Soft get an index from a list. If index doesn't exist, return a failSafe
         static byte TryGetFromList(List<byte> array, int index, byte failSafe)
         {
@@ -102,17 +128,35 @@ namespace BinaryEscaper
             }
 
             //Begin inserting header
+            int headerInsertOffset = 0;
 
             //Was compression used in generating this PNG?
-            binary.Insert(0, options.compress ? (byte)1 : (byte)0);
+            binary.Insert(headerInsertOffset, options.compress ? (byte)1 : (byte)0);
+            headerInsertOffset += 1;
 
             //Insert original extension string
             var extensionBytes = Encoding.UTF8.GetBytes(Path.GetExtension(options.inputPath).Substring(1)).ToList();
             extensionBytes.RemoveAll(x => x == 0);
-            binary.InsertRange(1, extensionBytes);
+            binary.InsertRange(headerInsertOffset, extensionBytes);
+            headerInsertOffset += extensionBytes.Count;
 
             //Null-byte terminator
-            binary.Insert(extensionBytes.Count + 1, 0);
+            binary.Insert(headerInsertOffset, 0);
+            headerInsertOffset += 1;
+
+            Console.WriteLine("Calculating SHA256 CheckSum...");
+            string binaryCheckSum = SHA256CheckSum(rawBinary);
+            for (int i = 0; i < binaryCheckSum.Length; i++)
+            {
+                var c = binaryCheckSum[i];
+
+                binary.Insert(headerInsertOffset, (byte)c);
+                headerInsertOffset += 1;
+            }
+            Console.Write("CheckSum: ");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine(binaryCheckSum);
+            Console.ForegroundColor = ConsoleColor.White;
 
             var imageSize = (int)Math.Ceiling(Math.Sqrt(binary.Count / 4));
 
@@ -248,8 +292,17 @@ namespace BinaryEscaper
             }
             originalExtension = Encoding.UTF8.GetString(originalExtensionBytes.ToArray());
 
+            var originalCheckSumBytes = new List<byte>();
+            var originalCheckSum = "";
+
+            for(int i = 0; i < 64; i++)
+            {
+                originalCheckSumBytes.Add(bytes[i + 2 + originalExtensionBytes.Count]);
+            }
+            originalCheckSum = Encoding.ASCII.GetString(originalCheckSumBytes.ToArray());
+
             //Calculate total header size
-            var headerSize = originalExtensionBytes.Count + 2; //+2 to account for usedCompression byte and null terminator byte
+            var headerSize = originalExtensionBytes.Count + 2 + 64; //+2 to account for usedCompression byte and null terminator byte, +64 for the sha256 checksum
 
             //Remove header and send it off to get decompressed/written to output
             bytes.RemoveRange(0, headerSize);
@@ -259,6 +312,38 @@ namespace BinaryEscaper
             {
                 Console.WriteLine("Decompressing");
                 bytesArray = Decompress(bytesArray);
+            }
+
+            Console.WriteLine("Calculating new SHA256 CheckSum...");
+            var newCheckSum = SHA256CheckSum(bytesArray);
+
+            if(originalCheckSum == newCheckSum)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("CheckSums match!");
+                Console.ForegroundColor = ConsoleColor.White;
+
+                Console.WriteLine("CheckSum is: " + originalCheckSum);
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("CheckSums do not match!");
+
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.Write("Original CheckSum: ");
+                Console.ForegroundColor = ConsoleColor.DarkGreen;
+                Console.WriteLine(originalCheckSum);
+
+                Console.ForegroundColor = ConsoleColor.White;
+
+                Console.Write("New CheckSum: ");
+                Console.ForegroundColor = ConsoleColor.DarkRed;
+                Console.WriteLine(newCheckSum);
+                Console.ForegroundColor = ConsoleColor.White;
+
+                Console.WriteLine("Press any key to continue decoding...");
+                Console.ReadKey();
             }
 
             var outputPath = options.outputPath;
